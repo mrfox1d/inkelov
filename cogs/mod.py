@@ -2,6 +2,7 @@ from datetime import timedelta
 import disnake
 from disnake.ext import commands
 from db.interaction import Database
+import asyncio
 
 db = Database()
 
@@ -427,9 +428,12 @@ class Moderation(commands.Cog):
         def check(msg: disnake.Message):
             return member is None or msg.author == member
 
+        if isinstance(target_ctx, commands.Context):
+            await target_ctx.message.delete()
+
         deleted = await target_ctx.channel.purge(limit=amount, check=check)
 
-        await reply_embed(
+        msg = await reply_embed(
             target_ctx,
             mod_embed(
                 "🧹 Очистка выполнена",
