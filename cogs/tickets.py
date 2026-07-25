@@ -162,13 +162,15 @@ class Tickets(commands.Cog):
  
     @ticketpanel.error
     async def ticketpanel_error(self, ctx: commands.Context, error: Exception):
+        embed=disnake.Embed(
+            title="⛔ Нет прав",
+            description="Эта команда только для администраторов.",
+            color=CLR_CLOSE,
+        )
+        embed.add_image(url="https://cdn.discordapp.com/attachments/1426248749830897758/1530555566093766777/Untitled16_20260725152450.jpg?ex=6a660073&is=6a64aef3&hm=f3d98cdd992518e6b8443717f87c4080687ffd3bad4ca368200e6bcc21ca15dc")
         if isinstance(error, commands.MissingPermissions):
             await ctx.send(
-                embed=disnake.Embed(
-                    title="⛔ Нет прав",
-                    description="Эта команда только для администраторов.",
-                    color=CLR_CLOSE,
-                )
+                embed=embed
             )
         else:
             await ctx.send(embed=disnake.Embed(title="❌ Ошибка", description=f"```{error}```", color=CLR_CLOSE))
