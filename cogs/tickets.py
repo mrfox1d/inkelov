@@ -8,7 +8,13 @@ CLR_CLOSE = 0xFF2E2E
 CLR_INFO  = 0x00D9FF
 
 TICKET_CATEGORY_ID = 1529832608199086201
-SUPPORT_ROLE_ID = 1540306233402200106
+SUPPORT_ROLE_ID = 1529826871271755929  # TODO: ЗАМЕНИТЬ НА ВАЛИДНОЕ ПОСЛЕ ТЕСТОВ
+
+# ────────────────────────── КАТЕГОРИИ ТИКЕТОВ ──────────────────────────
+# value — используется в custom_id и как префикс имени канала
+# label/description/emoji — то, что видит юзер в select menu
+# question — что бот спросит юзера в открытом тикете
+
 TICKET_CATEGORIES = [
     {
         "value": "complaint",
@@ -82,6 +88,8 @@ def ticket_open_embed(author: disnake.Member, category: dict) -> disnake.Embed:
     return embed
 
 
+# ──────────────────────────── SELECT MENU VIEW ──────────────────────────
+
 class TicketCategorySelect(disnake.ui.StringSelect):
     def __init__(self):
         options = [
@@ -143,6 +151,7 @@ class TicketCategorySelect(disnake.ui.StringSelect):
             if support_role:
                 overwrites[support_role] = disnake.PermissionOverwrite(view_channel=True, send_messages=True)
 
+        # Discord позволяет максимум 50 каналов в категории
         if len(parent_category.channels) >= 50:
             return await inter.followup.send(
                 embed=disnake.Embed(
@@ -274,6 +283,7 @@ class AddUserSelectView(disnake.ui.View):
 class Tickets(commands.Cog):
     def __init__(self, bot: commands.Bot):
         self.bot = bot
+        # регистрируем постоянные views, чтобы кнопки/меню работали после рестарта бота
         bot.add_view(TicketPanelView())
         bot.add_view(TicketCloseView())
 

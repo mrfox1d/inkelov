@@ -4,6 +4,7 @@ import disnake
 from disnake.ext import commands
 from dotenv import load_dotenv
 from db.interaction import Database
+from db.db_guard import set_bot
 
 load_dotenv()
 
@@ -20,13 +21,14 @@ async def main():
             url="https://twitch.tv/mrfox1d"
         )
     )
+    set_bot(bot)  # привязываем бота к db_guard ДО любых обращений к БД
+
     db = Database()
 
     @bot.event
     async def on_ready():
         print(f"Logged in as {bot.user} ({bot.user.id})")
-
-    await db.init_db()
+        await db.init_db()
 
     bot.load_extensions("cogs")
 
