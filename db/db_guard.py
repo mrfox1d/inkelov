@@ -1,18 +1,3 @@
-"""
-db_guard.py — прослойка между кодом БД и aiosqlite.
-
-Перед КАЖДЫМ подключением к БД проверяет, существует ли файл на диске.
-Если нет (удалили, сломался диск, откатили volume и т.п.) — в реальном
-времени тянет последний бэкап из канала BACKUP_CHANNEL_ID и один раз
-оповещает сервер в ALERT_CHANNEL_ID.
-
-Использование в db/interaction.py — вместо:
-    async with aiosqlite.connect(self.db_path) as db:
-пиши:
-    from db.db_guard import get_connection
-    async with get_connection(self.db_path) as db:
-"""
-
 import os
 import asyncio
 import aiosqlite
@@ -21,10 +6,8 @@ import disnake
 BACKUP_CHANNEL_ID = 1540312888546427030
 ALERT_CHANNEL_ID = 1540313688064532480
 
-# Заполняется ботом при старте (main.py): db_guard.set_bot(bot)
 _bot = None
 
-# Чтобы параллельные корутины не дёргали восстановление одновременно
 _restore_lock = asyncio.Lock()
 _last_restore_notice_sent = False
 
@@ -65,7 +48,6 @@ async def _restore_from_backup(db_path: str) -> bool:
         print("[db_guard] Бэкапов не найдено в канале.")
         return False
 
-    # гарантируем существование родительской папки (например db/)
     parent_dir = os.path.dirname(db_path)
     if parent_dir:
         os.makedirs(parent_dir, exist_ok=True)
@@ -105,8 +87,6 @@ async def _ensure_db_ready(db_path: str):
         return
 
     async with _restore_lock:
-        # повторная проверка внутри лока — другая корутина уже могла восстановить,
-        # пока мы ждали лок
         if os.path.exists(db_path):
             return
         await _restore_from_backup(db_path)
