@@ -50,8 +50,8 @@ REPEAT_WINDOW_SECONDS = 60      # за это время
 REPEAT_MUTE_HOURS = 24
 
 # ── Антиспам: пинги ──
-PING_THRESHOLD = 5              # больше 5 пингов
-PING_WINDOW_SECONDS = 600       # за 10 минут
+PING_THRESHOLD = 15             # больше 15 пингов
+PING_WINDOW_SECONDS = 300       # за 5 минут
 PING_MUTE_HOURS = 48
 
 
@@ -62,9 +62,7 @@ def is_url_allowed(url: str) -> bool:
 class AutoMod(commands.Cog):
     def __init__(self, bot: commands.Bot):
         self.bot = bot
-        # user_id -> deque[(timestamp, message_content)]
         self.recent_messages: dict[int, deque] = defaultdict(lambda: deque(maxlen=REPEAT_THRESHOLD))
-        # user_id -> deque[timestamps пингов]
         self.recent_pings: dict[int, deque] = defaultdict(deque)
 
     # ──────────────────────── ОБЩАЯ ЛОГИКА НАКАЗАНИЯ ────────────────────────
