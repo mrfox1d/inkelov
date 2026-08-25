@@ -1,6 +1,7 @@
 import aiosqlite
 from datetime import datetime
 from db.db_guard import get_connection
+from db.migrations import run_migrations
 
 DB_PATH = "db/database.db"
 
@@ -107,14 +108,12 @@ class Database:
                     punishment    TEXT NOT NULL,
                     created_at    TEXT NOT NULL DEFAULT (datetime('now'))
                 );
-                CREATE TABLE IF NOT EXISTS counting_state (
-                    channel_id      INTEGER PRIMARY KEY,
-                    current_count   INTEGER NOT NULL DEFAULT 0,
-                    last_user_id    INTEGER,
-                    initialized     INTEGER NOT NULL DEFAULT 0
-                );
             """)
             await db.commit()
+
+            applied = await run_migrations(db)
+            if applied:
+                print(f"[db] Применены миграции схемы: {', '.join(applied)}")
 
     # ──────────────────────────── USERS / ECONOMY ────────────────────────────
 
@@ -633,49 +632,3 @@ class Database:
                 (guild_id, limit),
             ) as cur:
                 return [dict(r) for r in await cur.fetchall()]
-
-    async def get_counting_state(self, channel_id: int) -> dict | None:
-        async with get_connection(self.db_path) as db:
-            db.row_factory = aiosqlite.Row
-            async with db.execute(
-                "SELECT * FROM counting_state WHERE channel_id = ?", (channel_id,)
-            ) as cur:
-                row = await cur.fetchone()
-                return dict(row) if row else None
-    
-    
-    async def init_counting_state(self, channel_id: int, current_count: int) -> None:
-        """Вызывается один раз — при первом запуске, когда счёт восстановлен из истории канала."""
-        async with get_connection(self.db_path) as db:
-            await db.execute(
-                """INSERT INTO counting_state (channel_id, current_count, last_user_id, initialized)
-                VALUES (?, ?, NULL, 1)
-                ON CONFLICT(channel_id) DO UPDATE SET
-                    current_count = excluded.current_count,
-                    initialized = 1""",
-                (channel_id, current_count),
-            )
-            await db.commit()
-    
-    
-    async def set_counting_state(self, channel_id: int, current_count: int, last_user_id: int) -> None:
-        async with get_connection(self.db_path) as db:
-            await db.execute(
-                """INSERT INTO counting_state (channel_id, current_count, last_user_id, initialized)
-                VALUES (?, ?, ?, 1)
-                ON CONFLICT(channel_id) DO UPDATE SET
-                    current_count = excluded.current_count,
-                    last_user_id = excluded.last_user_id""",
-                (channel_id, current_count, last_user_id),
-            )
-            await db.commit()
-    
-    
-    async def reset_counting_state(self, channel_id: int) -> None:
-        async with get_connection(self.db_path) as db:
-            await db.execute(
-                """UPDATE counting_state SET current_count = 0, last_user_id = NULL
-                WHERE channel_id = ?""",
-                (channel_id,),
-            )
-            await db.commit()
