@@ -60,8 +60,57 @@ class Database:
                     created_at  TEXT NOT NULL DEFAULT (datetime('now')),
                     FOREIGN KEY (user_id) REFERENCES users(user_id)
                 );
+
+                CREATE TABLE IF NOT EXISTS panels (
+                    panel_key   TEXT PRIMARY KEY,
+                    guild_id    INTEGER NOT NULL,
+                    channel_id  INTEGER NOT NULL,
+                    message_id  INTEGER NOT NULL
+                );
+
+                CREATE TABLE IF NOT EXISTS giveaways (
+                    giveaway_id   INTEGER PRIMARY KEY AUTOINCREMENT,
+                    guild_id      INTEGER NOT NULL,
+                    channel_id    INTEGER NOT NULL,
+                    message_id    INTEGER NOT NULL,
+                    host_id       INTEGER NOT NULL,
+                    prize         TEXT NOT NULL,
+                    winners_count INTEGER NOT NULL DEFAULT 1,
+                    ends_at       TEXT NOT NULL,
+                    min_role_id   INTEGER,
+                    min_level     INTEGER NOT NULL DEFAULT 0,
+                    status        TEXT NOT NULL DEFAULT 'active',
+                    created_at    TEXT NOT NULL DEFAULT (datetime('now'))
+                );
+
+                CREATE TABLE IF NOT EXISTS giveaway_entries (
+                    entry_id      INTEGER PRIMARY KEY AUTOINCREMENT,
+                    giveaway_id   INTEGER NOT NULL,
+                    user_id       INTEGER NOT NULL,
+                    entered_at    TEXT NOT NULL DEFAULT (datetime('now')),
+                    UNIQUE(giveaway_id, user_id),
+                    FOREIGN KEY (giveaway_id) REFERENCES giveaways(giveaway_id)
+                );
+
+                CREATE TABLE IF NOT EXISTS security_whitelist (
+                    user_id     INTEGER PRIMARY KEY,
+                    added_by    INTEGER NOT NULL,
+                    added_at    TEXT NOT NULL DEFAULT (datetime('now'))
+                );
+
+                CREATE TABLE IF NOT EXISTS antiraid_incidents (
+                    incident_id   INTEGER PRIMARY KEY AUTOINCREMENT,
+                    guild_id      INTEGER NOT NULL,
+                    actor_id      INTEGER NOT NULL,
+                    action_type   TEXT NOT NULL,
+                    action_count  INTEGER NOT NULL,
+                    punishment    TEXT NOT NULL,
+                    created_at    TEXT NOT NULL DEFAULT (datetime('now'))
+                );
             """)
             await db.commit()
+
+    # ──────────────────────────── USERS / ECONOMY ────────────────────────────
 
     async def get_user(self, user_id: int) -> dict | None:
         """Получить пользователя. Возвращает dict или None."""
@@ -227,6 +276,8 @@ class Database:
 
         return {"leveled_up": leveled_up, "level": level, "xp": new_xp}
 
+    # ──────────────────────────── WARNS ────────────────────────────
+
     async def add_warning(self, user_id: int, mod_id: int, reason: str = None) -> int:
         """Выдать варн. Возвращает новое кол-во варнов."""
         await self.ensure_user(user_id)
@@ -284,6 +335,8 @@ class Database:
                 (user_id,),
             ) as cur:
                 return [dict(r) for r in await cur.fetchall()]
+
+    # ──────────────────────────── SHOP / INVENTORY ────────────────────────────
 
     async def add_item(
         self,
@@ -396,12 +449,40 @@ class Database:
             ) as cur:
                 return [dict(r) for r in await cur.fetchall()]
 
+    # ──────────────────────────── PANELS ────────────────────────────
+
+    async def set_panel(self, panel_key: str, guild_id: int, channel_id: int, message_id: int) -> None:
+        """Сохранить/обновить местоположение закреплённой панели (например 'shop')."""
+        async with get_connection(self.db_path) as db:
+            await db.execute(
+                """INSERT INTO panels (panel_key, guild_id, channel_id, message_id)
+                VALUES (?, ?, ?, ?)
+                ON CONFLICT(panel_key) DO UPDATE SET
+                    guild_id = excluded.guild_id,
+                    channel_id = excluded.channel_id,
+                    message_id = excluded.message_id""",
+                (panel_key, guild_id, channel_id, message_id),
+            )
+            await db.commit()
+
+    async def get_panel(self, panel_key: str) -> dict | None:
+        """Получить местоположение панели по ключу. None если панель не создавалась."""
+        async with get_connection(self.db_path) as db:
+            db.row_factory = aiosqlite.Row
+            async with db.execute(
+                "SELECT * FROM panels WHERE panel_key = ?", (panel_key,)
+            ) as cur:
+                row = await cur.fetchone()
+                return dict(row) if row else None
+
+    # ──────────────────────────── GIVEAWAYS ────────────────────────────
+
     async def create_giveaway(
         self, guild_id: int, channel_id: int, message_id: int, host_id: int,
         prize: str, winners_count: int, ends_at: str,
         min_role_id: int = None, min_level: int = 0,
     ) -> int:
-        async with aiosqlite.connect(self.db_path) as db:
+        async with get_connection(self.db_path) as db:
             cur = await db.execute(
                 """INSERT INTO giveaways
                 (guild_id, channel_id, message_id, host_id, prize, winners_count, ends_at, min_role_id, min_level)
@@ -411,41 +492,36 @@ class Database:
             await db.commit()
             return cur.lastrowid
 
-
     async def get_giveaway(self, giveaway_id: int) -> dict | None:
-        async with aiosqlite.connect(self.db_path) as db:
+        async with get_connection(self.db_path) as db:
             db.row_factory = aiosqlite.Row
             async with db.execute("SELECT * FROM giveaways WHERE giveaway_id = ?", (giveaway_id,)) as cur:
                 row = await cur.fetchone()
                 return dict(row) if row else None
 
-
     async def get_giveaway_by_message(self, message_id: int) -> dict | None:
-        async with aiosqlite.connect(self.db_path) as db:
+        async with get_connection(self.db_path) as db:
             db.row_factory = aiosqlite.Row
             async with db.execute("SELECT * FROM giveaways WHERE message_id = ?", (message_id,)) as cur:
                 row = await cur.fetchone()
                 return dict(row) if row else None
 
-
     async def get_active_giveaways(self) -> list[dict]:
         """Все розыгрыши со статусом 'active' — используется для восстановления таймеров после рестарта."""
-        async with aiosqlite.connect(self.db_path) as db:
+        async with get_connection(self.db_path) as db:
             db.row_factory = aiosqlite.Row
             async with db.execute("SELECT * FROM giveaways WHERE status = 'active'") as cur:
                 return [dict(r) for r in await cur.fetchall()]
 
-
     async def set_giveaway_status(self, giveaway_id: int, status: str) -> None:
         """status: 'active' | 'ended' | 'cancelled'"""
-        async with aiosqlite.connect(self.db_path) as db:
+        async with get_connection(self.db_path) as db:
             await db.execute("UPDATE giveaways SET status = ? WHERE giveaway_id = ?", (status, giveaway_id))
             await db.commit()
 
-
     async def add_giveaway_entry(self, giveaway_id: int, user_id: int) -> bool:
         """Добавить участника. True если добавлен, False если уже участвовал."""
-        async with aiosqlite.connect(self.db_path) as db:
+        async with get_connection(self.db_path) as db:
             try:
                 await db.execute(
                     "INSERT INTO giveaway_entries (giveaway_id, user_id) VALUES (?, ?)",
@@ -456,10 +532,9 @@ class Database:
             except aiosqlite.IntegrityError:
                 return False
 
-
     async def remove_giveaway_entry(self, giveaway_id: int, user_id: int) -> bool:
         """Убрать участника (повторный клик = отмена участия). True если был удалён."""
-        async with aiosqlite.connect(self.db_path) as db:
+        async with get_connection(self.db_path) as db:
             cur = await db.execute(
                 "DELETE FROM giveaway_entries WHERE giveaway_id = ? AND user_id = ?",
                 (giveaway_id, user_id),
@@ -467,30 +542,88 @@ class Database:
             await db.commit()
             return cur.rowcount > 0
 
-
     async def get_giveaway_entries(self, giveaway_id: int) -> list[int]:
         """Список user_id участников розыгрыша."""
-        async with aiosqlite.connect(self.db_path) as db:
+        async with get_connection(self.db_path) as db:
             async with db.execute(
                 "SELECT user_id FROM giveaway_entries WHERE giveaway_id = ?", (giveaway_id,)
             ) as cur:
                 rows = await cur.fetchall()
                 return [r[0] for r in rows]
 
-
     async def get_giveaway_entry_count(self, giveaway_id: int) -> int:
-        async with aiosqlite.connect(self.db_path) as db:
+        async with get_connection(self.db_path) as db:
             async with db.execute(
                 "SELECT COUNT(*) FROM giveaway_entries WHERE giveaway_id = ?", (giveaway_id,)
             ) as cur:
                 row = await cur.fetchone()
                 return row[0] if row else 0
 
-
     async def is_entered(self, giveaway_id: int, user_id: int) -> bool:
-        async with aiosqlite.connect(self.db_path) as db:
+        async with get_connection(self.db_path) as db:
             async with db.execute(
                 "SELECT 1 FROM giveaway_entries WHERE giveaway_id = ? AND user_id = ?",
                 (giveaway_id, user_id),
             ) as cur:
                 return await cur.fetchone() is not None
+
+    # ──────────────────────────── SECURITY WHITELIST ────────────────────────────
+
+    async def add_to_security_whitelist(self, user_id: int, added_by: int) -> bool:
+        """Добавить юзера в вайтлист. False если уже там."""
+        async with get_connection(self.db_path) as db:
+            try:
+                await db.execute(
+                    "INSERT INTO security_whitelist (user_id, added_by) VALUES (?, ?)",
+                    (user_id, added_by),
+                )
+                await db.commit()
+                return True
+            except aiosqlite.IntegrityError:
+                return False
+
+    async def remove_from_security_whitelist(self, user_id: int) -> bool:
+        """Убрать юзера из вайтлиста. True если был удалён."""
+        async with get_connection(self.db_path) as db:
+            cur = await db.execute("DELETE FROM security_whitelist WHERE user_id = ?", (user_id,))
+            await db.commit()
+            return cur.rowcount > 0
+
+    async def is_security_whitelisted(self, user_id: int) -> bool:
+        async with get_connection(self.db_path) as db:
+            async with db.execute(
+                "SELECT 1 FROM security_whitelist WHERE user_id = ?", (user_id,)
+            ) as cur:
+                return await cur.fetchone() is not None
+
+    async def get_security_whitelist(self) -> list[dict]:
+        async with get_connection(self.db_path) as db:
+            db.row_factory = aiosqlite.Row
+            async with db.execute(
+                "SELECT * FROM security_whitelist ORDER BY added_at ASC"
+            ) as cur:
+                return [dict(r) for r in await cur.fetchall()]
+
+    # ──────────────────────────── ANTIRAID ────────────────────────────
+
+    async def log_antiraid_incident(
+        self, guild_id: int, actor_id: int, action_type: str, action_count: int, punishment: str
+    ) -> int:
+        async with get_connection(self.db_path) as db:
+            cur = await db.execute(
+                """INSERT INTO antiraid_incidents (guild_id, actor_id, action_type, action_count, punishment)
+                VALUES (?, ?, ?, ?, ?)""",
+                (guild_id, actor_id, action_type, action_count, punishment),
+            )
+            await db.commit()
+            return cur.lastrowid
+
+    async def get_recent_antiraid_incidents(self, guild_id: int, limit: int = 10) -> list[dict]:
+        async with get_connection(self.db_path) as db:
+            db.row_factory = aiosqlite.Row
+            async with db.execute(
+                """SELECT * FROM antiraid_incidents WHERE guild_id = ?
+                ORDER BY created_at DESC LIMIT ?""",
+                (guild_id, limit),
+            ) as cur:
+                return [dict(r) for r in await cur.fetchall()]
