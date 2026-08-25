@@ -11,7 +11,7 @@ CLR_ALERT = 0xFF2E2E
 CLR_INFO  = 0x00D9FF
 CLR_OK    = 0x2EFF7A
 
-LOG_CHANNEL_ID = 1541724061384708127
+LOG_CHANNEL_ID = 1540400000000000000  # TODO: впиши ID канала для логов antiraid (можно тот же, что в security.py)
 
 # ────────────────────────── ПОРОГИ СРАБАТЫВАНИЯ ──────────────────────────
 # формат: action_type -> (макс. действий, окно в секундах, наказание)
@@ -36,14 +36,14 @@ DANGEROUS_PERMS = {
 }
 
 ACTION_TYPE_MAP = {
-    disnake.AuditLogActionType.ban: "ban",
-    disnake.AuditLogActionType.kick: "kick",
-    disnake.AuditLogActionType.channel_delete: "channel_delete",
-    disnake.AuditLogActionType.channel_create: "channel_create",
-    disnake.AuditLogActionType.role_delete: "role_delete",
-    disnake.AuditLogActionType.role_create: "role_create",
-    disnake.AuditLogActionType.webhook_create: "webhook_create",
-    disnake.AuditLogActionType.member_prune: "member_prune",
+    disnake.AuditLogAction.ban: "ban",
+    disnake.AuditLogAction.kick: "kick",
+    disnake.AuditLogAction.channel_delete: "channel_delete",
+    disnake.AuditLogAction.channel_create: "channel_create",
+    disnake.AuditLogAction.role_delete: "role_delete",
+    disnake.AuditLogAction.role_create: "role_create",
+    disnake.AuditLogAction.webhook_create: "webhook_create",
+    disnake.AuditLogAction.member_prune: "member_prune",
 }
 
 
@@ -137,7 +137,7 @@ class AntiRaid(commands.Cog):
             return
 
         # ── выдача опасных прав кому-либо (роль с administrator и т.п.) ──
-        if entry.action in (disnake.AuditLogActionType.role_update, disnake.AuditLogActionType.role_create):
+        if entry.action in (disnake.AuditLogAction.role_update, disnake.AuditLogAction.role_create):
             for change in entry.changes:
                 if change.key != "permissions":
                     continue

@@ -44,7 +44,7 @@ class Security(commands.Cog):
 
     @commands.Cog.listener()
     async def on_audit_log_entry_create(self, entry: disnake.AuditLogEntry):
-        if entry.action != disnake.AuditLogActionType.member_role_update:
+        if entry.action != disnake.AuditLogAction.member_role_update:
             return
 
         guild = entry.guild
