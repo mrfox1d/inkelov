@@ -30,6 +30,10 @@ SCHEMA = {
         ("daily_last", "TEXT"),
         ("work_last", "TEXT"),
         ("created_at", "TEXT NOT NULL DEFAULT (datetime('now'))"),
+        ("rob_last", "TEXT"),
+    	("fish_last", "TEXT"),
+    	("mine_last", "TEXT"),
+
     ],
     "shop": [
         ("name", "TEXT NOT NULL DEFAULT ''"),
@@ -95,6 +99,22 @@ SCHEMA = {
         ("current_count", "INTEGER NOT NULL DEFAULT 0"),
         ("last_user_id", "INTEGER"),
         ("initialized", "INTEGER NOT NULL DEFAULT 0"),
+    ],
+    "promocodes": [
+        ("reward_type", "TEXT NOT NULL DEFAULT 'balance'"),
+        ("reward_amount", "INTEGER"),
+        ("reward_item_id", "INTEGER"),
+        ("max_uses", "INTEGER NOT NULL DEFAULT -1"),
+        ("uses_count", "INTEGER NOT NULL DEFAULT 0"),
+        ("expires_at", "TEXT"),
+        ("created_by", "INTEGER NOT NULL DEFAULT 0"),
+        ("created_at", "TEXT NOT NULL DEFAULT (datetime('now'))"),
+        ("is_active", "INTEGER NOT NULL DEFAULT 1"),
+    ],
+    "promocode_redemptions": [
+        ("code", "TEXT NOT NULL DEFAULT ''"),
+        ("user_id", "INTEGER NOT NULL DEFAULT 0"),
+        ("redeemed_at", "TEXT NOT NULL DEFAULT (datetime('now'))"),
     ],
 }
 

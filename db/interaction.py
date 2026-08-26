@@ -790,3 +790,18 @@ class Database:
                 "INSERT INTO inventory (user_id, item_id) VALUES (?, ?)", (user_id, item_id)
             )
             await db.commit()
+
+    async def can_do_action(self, user_id: int, column: str, cooldown_seconds: int) -> bool:
+        user = await self.ensure_user(user_id)
+        last = user[column]
+        if not last:
+            return True
+        diff = datetime.utcnow() - datetime.fromisoformat(last)
+        return diff.total_seconds() >= cooldown_seconds
+
+    async def set_action_done(self, user_id: int, column: str) -> None:
+        if column not in {"rob_last", "fish_last", "mine_last"}:
+            raise ValueError("недопустимая колонка")  # белый список — не даём произвольное имя колонки в f-string
+        async with get_connection(self.db_path) as db:
+            await db.execute(f"UPDATE users SET {column} = ? WHERE user_id = ?", (datetime.utcnow().isoformat(), user_id))
+            await db.commit()
