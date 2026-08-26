@@ -108,6 +108,34 @@ class Database:
                     punishment    TEXT NOT NULL,
                     created_at    TEXT NOT NULL DEFAULT (datetime('now'))
                 );
+
+                CREATE TABLE IF NOT EXISTS counting_state (
+                    channel_id      INTEGER PRIMARY KEY,
+                    current_count   INTEGER NOT NULL DEFAULT 0,
+                    last_user_id    INTEGER,
+                    initialized     INTEGER NOT NULL DEFAULT 0
+                );
+                CREATE TABLE IF NOT EXISTS promocodes (
+                    code            TEXT PRIMARY KEY,
+                    reward_type     TEXT NOT NULL,              -- 'balance' | 'item'
+                    reward_amount   INTEGER,                     -- сумма, если reward_type='balance'
+                    reward_item_id  INTEGER,                     -- shop.item_id, если reward_type='item'
+                    max_uses        INTEGER NOT NULL DEFAULT -1, -- -1 = безлимит
+                    uses_count      INTEGER NOT NULL DEFAULT 0,
+                    expires_at      TEXT,                        -- NULL = бессрочный
+                    created_by      INTEGER NOT NULL,
+                    created_at      TEXT NOT NULL DEFAULT (datetime('now')),
+                    is_active       INTEGER NOT NULL DEFAULT 1
+                );
+
+                CREATE TABLE IF NOT EXISTS promocode_redemptions (
+                    redemption_id   INTEGER PRIMARY KEY AUTOINCREMENT,
+                    code            TEXT NOT NULL,
+                    user_id         INTEGER NOT NULL,
+                    redeemed_at     TEXT NOT NULL DEFAULT (datetime('now')),
+                    UNIQUE(code, user_id),
+                    FOREIGN KEY (code) REFERENCES promocodes(code)
+                );
             """)
             await db.commit()
 
@@ -632,3 +660,133 @@ class Database:
                 (guild_id, limit),
             ) as cur:
                 return [dict(r) for r in await cur.fetchall()]
+
+    # ──────────────────────────── COUNTING GAME ────────────────────────────
+
+    async def get_counting_state(self, channel_id: int) -> dict | None:
+        async with get_connection(self.db_path) as db:
+            db.row_factory = aiosqlite.Row
+            async with db.execute(
+                "SELECT * FROM counting_state WHERE channel_id = ?", (channel_id,)
+            ) as cur:
+                row = await cur.fetchone()
+                return dict(row) if row else None
+
+    async def init_counting_state(self, channel_id: int, current_count: int) -> None:
+        """Вызывается один раз — при первом запуске, когда счёт восстановлен из истории канала."""
+        async with get_connection(self.db_path) as db:
+            await db.execute(
+                """INSERT INTO counting_state (channel_id, current_count, last_user_id, initialized)
+                   VALUES (?, ?, NULL, 1)
+                   ON CONFLICT(channel_id) DO UPDATE SET
+                       current_count = excluded.current_count,
+                       initialized = 1""",
+                (channel_id, current_count),
+            )
+            await db.commit()
+
+    async def set_counting_state(self, channel_id: int, current_count: int, last_user_id: int) -> None:
+        async with get_connection(self.db_path) as db:
+            await db.execute(
+                """INSERT INTO counting_state (channel_id, current_count, last_user_id, initialized)
+                   VALUES (?, ?, ?, 1)
+                   ON CONFLICT(channel_id) DO UPDATE SET
+                       current_count = excluded.current_count,
+                       last_user_id = excluded.last_user_id""",
+                (channel_id, current_count, last_user_id),
+            )
+            await db.commit()
+
+    async def reset_counting_state(self, channel_id: int) -> None:
+        async with get_connection(self.db_path) as db:
+            await db.execute(
+                """UPDATE counting_state SET current_count = 0, last_user_id = NULL
+                   WHERE channel_id = ?""",
+                (channel_id,),
+            )
+            await db.commit()
+            
+    async def create_promocode(
+        self, code: str, reward_type: str, created_by: int,
+        reward_amount: int = None, reward_item_id: int = None,
+        max_uses: int = -1, expires_at: str = None,
+    ) -> bool:
+        """Создать промокод. False если код с таким именем уже существует."""
+        async with get_connection(self.db_path) as db:
+            try:
+                await db.execute(
+                    """INSERT INTO promocodes
+                       (code, reward_type, reward_amount, reward_item_id, max_uses, expires_at, created_by)
+                       VALUES (?, ?, ?, ?, ?, ?, ?)""",
+                    (code, reward_type, reward_amount, reward_item_id, max_uses, expires_at, created_by),
+                )
+                await db.commit()
+                return True
+            except aiosqlite.IntegrityError:
+                return False
+
+
+    async def get_promocode(self, code: str) -> dict | None:
+        async with get_connection(self.db_path) as db:
+            db.row_factory = aiosqlite.Row
+            async with db.execute(
+                "SELECT * FROM promocodes WHERE code = ?", (code,)
+            ) as cur:
+                row = await cur.fetchone()
+                return dict(row) if row else None
+
+
+    async def has_redeemed_promocode(self, code: str, user_id: int) -> bool:
+        async with get_connection(self.db_path) as db:
+            async with db.execute(
+                "SELECT 1 FROM promocode_redemptions WHERE code = ? AND user_id = ?",
+                (code, user_id),
+            ) as cur:
+                return await cur.fetchone() is not None
+
+
+    async def redeem_promocode(self, code: str, user_id: int) -> None:
+        """Записывает активацию и увеличивает счётчик использований.
+        Вызывать ТОЛЬКО после всех проверок (см. cog — atomic-логика проверки там)."""
+        async with get_connection(self.db_path) as db:
+            await db.execute(
+                "INSERT INTO promocode_redemptions (code, user_id) VALUES (?, ?)",
+                (code, user_id),
+            )
+            await db.execute(
+                "UPDATE promocodes SET uses_count = uses_count + 1 WHERE code = ?",
+                (code,),
+            )
+            await db.commit()
+
+
+    async def deactivate_promocode(self, code: str) -> bool:
+        """Деактивировать код (is_active=0). True если код существовал."""
+        async with get_connection(self.db_path) as db:
+            cur = await db.execute(
+                "UPDATE promocodes SET is_active = 0 WHERE code = ?", (code,)
+            )
+            await db.commit()
+            return cur.rowcount > 0
+
+
+    async def get_all_promocodes(self, only_active: bool = True) -> list[dict]:
+        async with get_connection(self.db_path) as db:
+            db.row_factory = aiosqlite.Row
+            query = "SELECT * FROM promocodes"
+            if only_active:
+                query += " WHERE is_active = 1"
+            query += " ORDER BY created_at DESC"
+            async with db.execute(query) as cur:
+                return [dict(r) for r in await cur.fetchall()]
+
+
+    async def _grant_item_free(self, user_id: int, item_id: int) -> None:
+        """Выдать товар в инвентарь напрямую, без списания баланса и без учёта стока.
+        Используется промокодами — награда должна быть бесплатной и не ограниченной стоком."""
+        await self.ensure_user(user_id)
+        async with get_connection(self.db_path) as db:
+            await db.execute(
+                "INSERT INTO inventory (user_id, item_id) VALUES (?, ?)", (user_id, item_id)
+            )
+            await db.commit()

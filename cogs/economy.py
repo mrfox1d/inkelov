@@ -329,7 +329,8 @@ class Economy(commands.Cog):
         await reply_embed(target_ctx, embed)
 
     SLOT_EMOJIS = ["🍒", "🍋", "🍇", "🍉", "⭐", "💎"]
-    SLOT_MULTIPLIERS = {"🍒": 2, "🍋": 3, "🍇": 4, "🍉": 5, "⭐": 8, "💎": 15}
+    SLOT_WEIGHTS = [35, 28, 20, 12, 4, 1]  # чем реже символ, тем больше платит — но джекпот крайне редкий
+    SLOT_MULTIPLIERS = {"🍒": 1.4, "🍋": 1.8, "🍇": 2.2, "🍉": 3, "⭐": 6, "💎": 12}
 
     async def _do_slots(self, target_ctx, bet: int):
         author = target_ctx.author
@@ -339,30 +340,22 @@ class Economy(commands.Cog):
                 target_ctx, econ_embed("❌ Недостаточно средств", f"В кошельке всего {money(bal)}.", CLR_FAIL), ephemeral=True,
             )
 
-        roll = [random.choice(self.SLOT_EMOJIS) for _ in range(3)]
+        roll = random.choices(self.SLOT_EMOJIS, weights=self.SLOT_WEIGHTS, k=3)
         slot_display = f"### 🎰 [ {' | '.join(roll)} ]"
 
         if roll[0] == roll[1] == roll[2]:
             multiplier = self.SLOT_MULTIPLIERS[roll[0]]
-            winnings = bet * multiplier
-            new_balance = await db.add_balance(author.id, winnings, reason="Slots: джекпот")
+            winnings = int(bet * multiplier)
+            new_balance = await db.add_balance(author.id, winnings - bet, reason="Slots: выигрыш")
             embed = econ_embed(
-                "🎰 ДЖЕКПОТ!",
+                "🎰 Три в ряд!",
                 f"{slot_display}\n\nВыигрыш x{multiplier}: **{money(winnings)}**",
                 CLR_GAME_W,
                 author=author,
                 fields=[("👛 Новый баланс", money(new_balance), False)],
             )
-        elif roll[0] == roll[1] or roll[1] == roll[2] or roll[0] == roll[2]:
-            new_balance, _ = await db.get_balance(author.id)
-            embed = econ_embed(
-                "🎰 Почти!",
-                f"{slot_display}\n\nДве совпали — ставка возвращена.",
-                CLR_BANK,
-                author=author,
-                fields=[("👛 Баланс", money(new_balance), False)],
-            )
         else:
+            # две одинаковые больше не спасают ставку — только полный джекпот платит
             new_balance = await db.add_balance(author.id, -bet, reason="Slots: проигрыш")
             embed = econ_embed(
                 "🎰 Не повезло",
@@ -373,6 +366,238 @@ class Economy(commands.Cog):
             )
 
         await reply_embed(target_ctx, embed)
+
+    # ──────────────────────── ROULETTE (числа/цвета) ────────────────────────
+
+    ROULETTE_RED = {1, 3, 5, 7, 9, 12, 14, 16, 18, 19, 21, 23, 25, 27, 30, 32, 34, 36}
+
+    async def _do_roulette(self, target_ctx, bet: int, choice: str):
+        author = target_ctx.author
+        choice = choice.lower().strip()
+
+        bal, _ = await db.get_balance(author.id)
+        if bet > bal:
+            return await reply_embed(
+                target_ctx, econ_embed("❌ Недостаточно средств", f"В кошельке всего {money(bal)}.", CLR_FAIL), ephemeral=True,
+            )
+
+        number = random.randint(0, 36)
+        color = "green" if number == 0 else ("red" if number in self.ROULETTE_RED else "black")
+        color_emoji = {"red": "🔴", "black": "⚫", "green": "🟢"}[color]
+
+        won = False
+        multiplier = 0
+
+        if choice in ("red", "black", "красное", "чёрное", "черное"):
+            bet_color = "red" if choice in ("red", "красное") else "black"
+            won = bet_color == color
+            multiplier = 2
+        elif choice.isdigit():
+            won = int(choice) == number
+            multiplier = 14  # ниже классических 35x — под честный минус-RTP
+        else:
+            return await reply_embed(
+                target_ctx, econ_embed(
+                    "❌ Ошибка", "Ставь на `red`/`black` или на конкретное число 0-36.", CLR_FAIL,
+                ), ephemeral=True,
+            )
+
+        result_line = f"### 🎡 Выпало: {color_emoji} **{number}**"
+
+        if won:
+            winnings = bet * multiplier
+            new_balance = await db.add_balance(author.id, winnings - bet, reason="Roulette: выигрыш")
+            embed = econ_embed(
+                "🎡 Выигрыш!",
+                f"{result_line}\n\nВыигрыш x{multiplier}: **{money(winnings)}**",
+                CLR_GAME_W, author=author,
+                fields=[("👛 Новый баланс", money(new_balance), False)],
+            )
+        else:
+            new_balance = await db.add_balance(author.id, -bet, reason="Roulette: проигрыш")
+            embed = econ_embed(
+                "🎡 Не в этот раз",
+                f"{result_line}\n\nПотеряно: **{money(bet)}**",
+                CLR_GAME_L, author=author,
+                fields=[("👛 Новый баланс", money(new_balance), False)],
+            )
+
+        await reply_embed(target_ctx, embed)
+
+    # ──────────────────────── GUESS (угадай число) ────────────────────────
+
+    async def _do_guess(self, target_ctx, bet: int, number: int):
+        author = target_ctx.author
+
+        if not (1 <= number <= 10):
+            return await reply_embed(
+                target_ctx, econ_embed("❌ Ошибка", "Число должно быть от 1 до 10.", CLR_FAIL), ephemeral=True,
+            )
+
+        bal, _ = await db.get_balance(author.id)
+        if bet > bal:
+            return await reply_embed(
+                target_ctx, econ_embed("❌ Недостаточно средств", f"В кошельке всего {money(bal)}.", CLR_FAIL), ephemeral=True,
+            )
+
+        actual = random.randint(1, 10)
+
+        if number == actual:
+            multiplier = 7  # 1/10 шанс, честный множитель был бы x10 — тут x7, минус-RTP
+            winnings = bet * multiplier
+            new_balance = await db.add_balance(author.id, winnings - bet, reason="Guess: угадал")
+            embed = econ_embed(
+                "🎯 Угадал!",
+                f"Загаданное число: **{actual}**\n\nВыигрыш x{multiplier}: **{money(winnings)}**",
+                CLR_GAME_W, author=author,
+                fields=[("👛 Новый баланс", money(new_balance), False)],
+            )
+        else:
+            new_balance = await db.add_balance(author.id, -bet, reason="Guess: не угадал")
+            embed = econ_embed(
+                "🎯 Мимо",
+                f"Ты назвал **{number}**, а выпало **{actual}**.\n\nПотеряно: **{money(bet)}**",
+                CLR_GAME_L, author=author,
+                fields=[("👛 Новый баланс", money(new_balance), False)],
+            )
+
+        await reply_embed(target_ctx, embed)
+
+    # ──────────────────────── ROB (ограбление) ────────────────────────
+
+    ROB_SUCCESS_CHANCE = 0.35
+    ROB_STEAL_MIN_PCT = 0.10
+    ROB_STEAL_MAX_PCT = 0.30
+    ROB_FAIL_FINE_PCT = 0.15
+    ROB_COOLDOWN_SECONDS = 3600
+
+    async def _do_rob(self, target_ctx, member: disnake.Member):
+        author = target_ctx.author
+
+        if member.id == author.id:
+            return await reply_embed(
+                target_ctx, econ_embed("❌ Ошибка", "Нельзя ограбить самого себя.", CLR_FAIL), ephemeral=True,
+            )
+        if member.bot:
+            return await reply_embed(
+                target_ctx, econ_embed("❌ Ошибка", "Ботов грабить бессмысленно.", CLR_FAIL), ephemeral=True,
+            )
+
+        can_rob = await db.can_do_action(author.id, "rob_last", self.ROB_COOLDOWN_SECONDS)
+        if not can_rob:
+            return await reply_embed(
+                target_ctx, econ_embed("⏳ Рано грабить", "Дай себе отдохнуть перед следующим ограблением. Попробуй позже.", CLR_FAIL), ephemeral=True,
+            )
+
+        victim_bal, _ = await db.get_balance(member.id)
+        if victim_bal < 50:
+            return await reply_embed(
+                target_ctx, econ_embed(
+                    "❌ Нечего красть",
+                    f"У {member.mention} слишком мало денег в кошельке для ограбления.",
+                    CLR_FAIL,
+                ), ephemeral=True,
+            )
+
+        author_bal, _ = await db.get_balance(author.id)
+        await db.set_action_done(author.id, "rob_last")
+
+        success = random.random() < self.ROB_SUCCESS_CHANCE
+
+        if success:
+            steal_pct = random.uniform(self.ROB_STEAL_MIN_PCT, self.ROB_STEAL_MAX_PCT)
+            stolen = max(1, int(victim_bal * steal_pct))
+
+            await db.add_balance(member.id, -stolen, reason=f"Ограблен пользователем {author}")
+            new_author_balance = await db.add_balance(author.id, stolen, reason=f"Ограбление {member}")
+
+            embed = econ_embed(
+                "🦹 Ограбление удалось!",
+                f"Ты стащил **{money(stolen)}** из кошелька {member.mention}!",
+                CLR_GAME_W, author=author,
+                fields=[("👛 Новый баланс", money(new_author_balance), False)],
+            )
+        else:
+            fine = max(1, int(author_bal * self.ROB_FAIL_FINE_PCT))
+            new_author_balance = await db.add_balance(author.id, -fine, reason="Ограбление: пойман, штраф")
+
+            embed = econ_embed(
+                "🚨 Тебя поймали!",
+                f"Попытка ограбить {member.mention} провалилась. Штраф: **{money(fine)}**",
+                CLR_GAME_L, author=author,
+                fields=[("👛 Новый баланс", money(new_author_balance), False)],
+            )
+
+        await reply_embed(target_ctx, embed)
+
+    # ──────────────────────── FISH / MINE (доп. заработок) ────────────────────────
+
+    FISH_LOOT = [
+        ("поймал старый ботинок", 5, 20, 0.15),
+        ("поймал мелкую рыбёшку", 20, 60, 0.35),
+        ("поймал хорошего окуня", 60, 150, 0.30),
+        ("поймал редкого лосося", 150, 300, 0.15),
+        ("выловил сундук с сокровищами", 400, 800, 0.05),
+    ]
+
+    MINE_LOOT = [
+        ("накопал только камней", 5, 20, 0.15),
+        ("нашёл немного угля", 20, 60, 0.35),
+        ("добыл железную руду", 60, 150, 0.30),
+        ("нашёл золотую жилу", 150, 300, 0.15),
+        ("наткнулся на алмазную жилу", 400, 800, 0.05),
+    ]
+
+    def _weighted_loot(self, loot_table):
+        names = [l[0] for l in loot_table]
+        weights = [l[3] for l in loot_table]
+        chosen = random.choices(loot_table, weights=weights, k=1)[0]
+        text, low, high, _ = chosen
+        return text, random.randint(low, high)
+
+    async def _do_fish(self, target_ctx):
+        author = target_ctx.author
+        can_action = await db.can_do_action(author.id, "fish_last", 1800)
+        if not can_action:
+            return await reply_embed(
+                target_ctx, econ_embed("⏳ Отдохни", "Слишком рано для новой рыбалки. Попробуй позже.", CLR_FAIL), ephemeral=True,
+            )
+
+        text, earned = self._weighted_loot(self.FISH_LOOT)
+        new_balance = await db.add_balance(author.id, earned, reason="Рыбалка")
+        await db.set_action_done(author.id, "fish_last")
+
+        await reply_embed(
+            target_ctx,
+            econ_embed(
+                "🎣 Рыбалка",
+                f"Ты {text} и заработал **{money(earned)}**",
+                CLR_MONEY, author=author,
+                fields=[("👛 Новый баланс", money(new_balance), False)],
+            ),
+        )
+
+    async def _do_mine(self, target_ctx):
+        author = target_ctx.author
+        can_action = await db.can_do_action(author.id, "mine_last", 1800)
+        if not can_action:
+            return await reply_embed(
+                target_ctx, econ_embed("⏳ Отдохни", "Слишком рано для новой добычи. Попробуй позже.", CLR_FAIL), ephemeral=True,
+            )
+
+        text, earned = self._weighted_loot(self.MINE_LOOT)
+        new_balance = await db.add_balance(author.id, earned, reason="Шахта")
+        await db.set_action_done(author.id, "mine_last")
+
+        await reply_embed(
+            target_ctx,
+            econ_embed(
+                "⛏️ Шахта",
+                f"Ты {text} и заработал **{money(earned)}**",
+                CLR_MONEY, author=author,
+                fields=[("👛 Новый баланс", money(new_balance), False)],
+            ),
+        )
 
     async def _do_inventory(self, target_ctx):
         author = target_ctx.author
@@ -454,6 +679,31 @@ class Economy(commands.Cog):
         """Крутить слоты"""
         await self._do_slots(ctx, bet)
 
+    @commands.command(name="roulette", aliases=["rl"])
+    async def txt_roulette(self, ctx: commands.Context, bet: int, choice: str):
+        """Рулетка: ставь на red/black или число 0-36"""
+        await self._do_roulette(ctx, bet, choice)
+
+    @commands.command(name="guess")
+    async def txt_guess(self, ctx: commands.Context, bet: int, number: int):
+        """Угадай число от 1 до 10"""
+        await self._do_guess(ctx, bet, number)
+
+    @commands.command(name="rob")
+    async def txt_rob(self, ctx: commands.Context, member: disnake.Member):
+        """Попытаться ограбить кошелёк другого пользователя (35% шанс успеха, банк не трогается)"""
+        await self._do_rob(ctx, member)
+
+    @commands.command(name="fish")
+    async def txt_fish(self, ctx: commands.Context):
+        """Порыбачить и заработать деньги"""
+        await self._do_fish(ctx)
+
+    @commands.command(name="mine")
+    async def txt_mine(self, ctx: commands.Context):
+        """Покопать в шахте и заработать деньги"""
+        await self._do_mine(ctx)
+
     @commands.command(name="inventory", aliases=["inv"])
     async def txt_inventory(self, ctx: commands.Context):
         """Посмотреть свой инвентарь"""
@@ -507,6 +757,34 @@ class Economy(commands.Cog):
     @commands.slash_command(name="slots", description="🎰 Крутить слоты")
     async def slash_slots(self, inter: disnake.AppCmdInter, bet: int = commands.Param(description="Ставка", ge=1)):
         await self._do_slots(inter, bet)
+
+    @commands.slash_command(name="roulette", description="🎡 Рулетка: ставь на red/black или число 0-36")
+    async def slash_roulette(
+        self, inter: disnake.AppCmdInter,
+        bet: int = commands.Param(description="Ставка", ge=1),
+        choice: str = commands.Param(description="red / black / число 0-36"),
+    ):
+        await self._do_roulette(inter, bet, choice)
+
+    @commands.slash_command(name="guess", description="🎯 Угадай число от 1 до 10")
+    async def slash_guess(
+        self, inter: disnake.AppCmdInter,
+        bet: int = commands.Param(description="Ставка", ge=1),
+        number: int = commands.Param(description="Число от 1 до 10", ge=1, le=10),
+    ):
+        await self._do_guess(inter, bet, number)
+
+    @commands.slash_command(name="rob", description="🦹 Попытаться ограбить кошелёк другого пользователя")
+    async def slash_rob(self, inter: disnake.AppCmdInter, member: disnake.Member = commands.Param(description="Кого ограбить")):
+        await self._do_rob(inter, member)
+
+    @commands.slash_command(name="fish", description="🎣 Порыбачить и заработать деньги")
+    async def slash_fish(self, inter: disnake.AppCmdInter):
+        await self._do_fish(inter)
+
+    @commands.slash_command(name="mine", description="⛏️ Покопать в шахте и заработать деньги")
+    async def slash_mine(self, inter: disnake.AppCmdInter):
+        await self._do_mine(inter)
 
     @commands.slash_command(name="inventory", description="🎒 Посмотреть свой инвентарь")
     async def slash_inventory(self, inter: disnake.AppCmdInter):
