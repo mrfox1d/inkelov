@@ -4,14 +4,13 @@ from collections import defaultdict, deque
 import disnake
 from disnake.ext import commands
 from db.interaction import Database
+from cogs.logs import log_action
 
 db = Database()
 
 CLR_ALERT = 0xFF2E2E
 CLR_INFO  = 0x00D9FF
 CLR_OK    = 0x2EFF7A
-
-LOG_CHANNEL_ID = 1540400000000000000  # TODO: впиши ID канала для логов antiraid (можно тот же, что в security.py)
 
 # ────────────────────────── ПОРОГИ СРАБАТЫВАНИЯ ──────────────────────────
 # формат: action_type -> (макс. действий, окно в секундах, наказание)
@@ -61,14 +60,6 @@ class AntiRaid(commands.Cog):
             return True
         return await db.is_security_whitelisted(user_id)
 
-    async def _log(self, guild: disnake.Guild, embed: disnake.Embed):
-        channel = guild.get_channel(LOG_CHANNEL_ID)
-        if channel:
-            try:
-                await channel.send(embed=embed)
-            except disnake.Forbidden:
-                pass
-
     def _record_action(self, guild_id: int, actor_id: int, action_type: str, window: int) -> int:
         """Записывает действие и возвращает кол-во действий этого типа в окне."""
         key = (guild_id, actor_id, action_type)
@@ -106,15 +97,19 @@ class AntiRaid(commands.Cog):
 
         await db.log_antiraid_incident(guild.id, actor_id, action_type, count, executed)
 
-        await self._log(guild, disnake.Embed(
-            title="🚨 AntiRaid: обнаружена подозрительная активность!",
-            description=(
+        await log_action(
+            self.bot, guild,
+            category="antiraid",
+            actor=None,  # это автоматическая реакция системы, а не действие конкретного модератора
+            action="Обнаружена подозрительная активность!",
+            details=(
                 f"**Пользователь:** {member.mention if member else f'`{actor_id}`'}\n"
                 f"**Действие:** `{action_type}` x**{count}** за короткое время\n"
                 f"**Реакция:** {executed}"
             ),
             color=CLR_ALERT,
-        ))
+            target=member,
+        )
 
         # снятие флага через минуту, чтобы можно было снова реагировать при повторном инциденте
         async def _clear_flag():

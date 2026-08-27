@@ -2,6 +2,7 @@ import random
 import disnake
 from disnake.ext import commands
 from db.interaction import Database
+from datetime import datetime
 
 db = Database()
 
@@ -104,7 +105,7 @@ class BalanceView(disnake.ui.View):
 class Economy(commands.Cog):
     def __init__(self, bot: commands.Bot):
         self.bot = bot
-        bot.add_view(BalanceView())  # регистрируем, чтобы кнопка работала после рестарта
+        bot.add_view(BalanceView())
 
     async def _do_balance(self, target_ctx, member: disnake.Member = None):
         author = target_ctx.author
@@ -634,11 +635,6 @@ class Economy(commands.Cog):
 
     # ─────────────────────── TEXT COMMANDS ─────────────────────────
 
-    @commands.command(name="balance", aliases=["bal"])
-    async def txt_balance(self, ctx: commands.Context, member: disnake.Member = None):
-        """Показать баланс (свой или чужой)"""
-        await self._do_balance(ctx, member)
-
     @commands.command(name="daily")
     async def txt_daily(self, ctx: commands.Context):
         """Забрать ежедневную награду"""
@@ -710,13 +706,6 @@ class Economy(commands.Cog):
         await self._do_inventory(ctx)
 
     # ─────────────────────── SLASH COMMANDS ────────────────────────
-
-    @commands.slash_command(name="balance", description="💰 Проверить баланс")
-    async def slash_balance(
-        self, inter: disnake.AppCmdInter,
-        member: disnake.Member = commands.Param(default=None, description="Чей баланс проверить"),
-    ):
-        await self._do_balance(inter, member)
 
     @commands.slash_command(name="daily", description="🎁 Забрать ежедневную награду")
     async def slash_daily(self, inter: disnake.AppCmdInter):

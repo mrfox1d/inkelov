@@ -33,6 +33,10 @@ SCHEMA = {
         ("rob_last", "TEXT"),
     	("fish_last", "TEXT"),
     	("mine_last", "TEXT"),
+        ("message_count", "INTEGER NOT NULL DEFAULT 0"),
+        ("voice_seconds", "INTEGER NOT NULL DEFAULT 0"),
+        ("voice_join_at", "TEXT"),
+        ("last_xp_message_at", "TEXT"),
 
     ],
     "shop": [

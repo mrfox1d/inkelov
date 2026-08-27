@@ -2,6 +2,7 @@ from datetime import timedelta
 import disnake
 from disnake.ext import commands
 from db.interaction import Database
+from cogs.logs import log_action
 import asyncio
 
 db = Database()
@@ -97,6 +98,16 @@ class Moderation(commands.Cog):
 
         await member.ban(reason=reason, delete_message_days=delete_days)
 
+        await log_action(
+            self.bot, guild,
+            category="bans",
+            actor=author,
+            action="Пользователь забанен",
+            details=f"**Цель:** {member.mention} (`{member.id}`)\n**Причина:** {reason}",
+            color=CLR_BAN,
+            target=member,
+        )
+
         await reply_embed(
             target_ctx,
             mod_embed(
@@ -131,6 +142,16 @@ class Moderation(commands.Cog):
                 mod_embed("❌ Ошибка", "Пользователь не найден или не в бане.", CLR_BAN),
                 ephemeral=True,
             )
+
+        await log_action(
+            self.bot, guild,
+            category="bans",
+            actor=author,
+            action="Пользователь разбанен",
+            details=f"**Цель:** {user} (`{user.id}`)\n**Причина:** {reason}",
+            color=CLR_OK,
+            target=user,
+        )
 
         await reply_embed(
             target_ctx,
@@ -172,6 +193,16 @@ class Moderation(commands.Cog):
             pass
 
         await member.kick(reason=reason)
+
+        await log_action(
+            self.bot, guild,
+            category="kicks",
+            actor=author,
+            action="Пользователь кикнут",
+            details=f"**Цель:** {member.mention} (`{member.id}`)\n**Причина:** {reason}",
+            color=CLR_KICK,
+            target=member,
+        )
 
         await reply_embed(
             target_ctx,
@@ -224,6 +255,16 @@ class Moderation(commands.Cog):
         except disnake.Forbidden:
             pass
 
+        await log_action(
+            self.bot, guild,
+            category="mutes",
+            actor=author,
+            action="Пользователь замучен",
+            details=f"**Цель:** {member.mention} (`{member.id}`)\n**Длительность:** {duration_str}\n**Причина:** {reason}",
+            color=CLR_MUTE,
+            target=member,
+        )
+
         await reply_embed(
             target_ctx,
             mod_embed(
@@ -258,6 +299,16 @@ class Moderation(commands.Cog):
 
         await member.timeout(duration=None)
 
+        await log_action(
+            self.bot, target_ctx.guild,
+            category="mutes",
+            actor=author,
+            action="Мут снят",
+            details=f"**Цель:** {member.mention} (`{member.id}`)",
+            color=CLR_OK,
+            target=member,
+        )
+
         await reply_embed(
             target_ctx,
             mod_embed(
@@ -284,11 +335,39 @@ class Moderation(commands.Cog):
         if total >= 5:
             await member.ban(reason=f"Авто-бан: {total} предупреждений")
             action_text = "\n\n⚙️ **Авто-бан:** достигнут лимит в 5 предупреждений."
+            await log_action(
+                self.bot, guild,
+                category="bans",
+                actor=None,  # автоматическое действие системы варнов, не прямой вызов модератора
+                action="Авто-бан за предупреждения",
+                details=f"**Цель:** {member.mention} (`{member.id}`)\n**Причина:** достигнут лимит в 5 предупреждений",
+                color=CLR_BAN,
+                target=member,
+            )
         elif total >= 3:
             await member.timeout(
                 duration=timedelta(hours=1), reason="Авто-мут: 3 предупреждения"
             )
             action_text = "\n\n⚙️ **Авто-мут:** выдан таймаут на 1 час."
+            await log_action(
+                self.bot, guild,
+                category="mutes",
+                actor=None,
+                action="Авто-мут за предупреждения",
+                details=f"**Цель:** {member.mention} (`{member.id}`)\n**Причина:** достигнуто 3 предупреждения\n**Длительность:** 1ч",
+                color=CLR_MUTE,
+                target=member,
+            )
+
+        await log_action(
+            self.bot, guild,
+            category="warns",
+            actor=author,
+            action="Выдано предупреждение",
+            details=f"**Цель:** {member.mention} (`{member.id}`)\n**Причина:** {reason}\n**Всего предупреждений:** {total}/5",
+            color=CLR_WARN,
+            target=member,
+        )
 
         try:
             await member.send(
@@ -384,6 +463,16 @@ class Moderation(commands.Cog):
         author = target_ctx.author
         total = await db.remove_warning(member.id)
 
+        await log_action(
+            self.bot, target_ctx.guild,
+            category="warns",
+            actor=author,
+            action="Предупреждение снято",
+            details=f"**Цель:** {member.mention} (`{member.id}`)\n**Осталось:** {total}/5",
+            color=CLR_OK,
+            target=member,
+        )
+
         await reply_embed(
             target_ctx,
             mod_embed(
@@ -402,6 +491,16 @@ class Moderation(commands.Cog):
     ):
         author = target_ctx.author
         await db.clear_warnings(member.id)
+
+        await log_action(
+            self.bot, target_ctx.guild,
+            category="warns",
+            actor=author,
+            action="Все предупреждения сброшены",
+            details=f"**Цель:** {member.mention} (`{member.id}`)",
+            color=CLR_OK,
+            target=member,
+        )
 
         await reply_embed(
             target_ctx,

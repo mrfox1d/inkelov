@@ -136,6 +136,13 @@ class Database:
                     UNIQUE(code, user_id),
                     FOREIGN KEY (code) REFERENCES promocodes(code)
                 );
+
+                CREATE TABLE IF NOT EXISTS log_channels (
+                    guild_id    INTEGER NOT NULL,
+                    category    TEXT NOT NULL,
+                    channel_id  INTEGER NOT NULL,
+                    PRIMARY KEY (guild_id, category)
+                );
             """)
             await db.commit()
 
@@ -283,7 +290,7 @@ class Database:
 
     def xp_for_level(self, level: int) -> int:
         """XP, нужный для следующего уровня."""
-        return 100 * (level ** 2)
+        return 200 * (level ** 2)
 
     async def add_xp(self, user_id: int, amount: int) -> dict:
         """
@@ -308,6 +315,135 @@ class Database:
             await db.commit()
 
         return {"leveled_up": leveled_up, "level": level, "xp": new_xp}
+
+    # ──────────────────────────── PROFILE / ACTIVITY STATS ────────────────────────────
+
+    async def register_message(self, user_id: int, xp_amount: int, xp_cooldown_seconds: int) -> dict:
+        """
+        Учесть сообщение: message_count растёт всегда, а XP начисляется не
+        чаще, чем раз в xp_cooldown_seconds (антиспам, чтобы нельзя было
+        накрутить уровень флудом).
+        Возвращает {"xp_gained": int, "leveled_up": bool, "level": int, "xp": int}
+        """
+        user = await self.ensure_user(user_id)
+        now = datetime.utcnow()
+
+        can_gain_xp = True
+        if user["last_xp_message_at"]:
+            last = datetime.fromisoformat(user["last_xp_message_at"])
+            can_gain_xp = (now - last).total_seconds() >= xp_cooldown_seconds
+
+        async with get_connection(self.db_path) as db:
+            await db.execute(
+                "UPDATE users SET message_count = message_count + 1 WHERE user_id = ?",
+                (user_id,),
+            )
+            if can_gain_xp:
+                await db.execute(
+                    "UPDATE users SET last_xp_message_at = ? WHERE user_id = ?",
+                    (now.isoformat(), user_id),
+                )
+            await db.commit()
+
+        if can_gain_xp:
+            result = await self.add_xp(user_id, xp_amount)
+            result["xp_gained"] = xp_amount
+            return result
+
+        return {"xp_gained": 0, "leveled_up": False, "level": user["level"], "xp": user["xp"]}
+
+    async def start_voice_session(self, user_id: int) -> None:
+        """Отметить начало войс-сессии (заход в голосовой канал)."""
+        await self.ensure_user(user_id)
+        async with get_connection(self.db_path) as db:
+            await db.execute(
+                "UPDATE users SET voice_join_at = ? WHERE user_id = ?",
+                (datetime.utcnow().isoformat(), user_id),
+            )
+            await db.commit()
+
+    async def end_voice_session(self, user_id: int, xp_per_minute: int) -> dict | None:
+        """
+        Завершить войс-сессию: начисляет накопленные voice_seconds и XP
+        (пропорционально полным минутам). Возвращает None, если активной
+        сессии не было (например, voice_join_at уже сброшен — двойной
+        вызов события на некоторых клиентах Discord).
+        """
+        user = await self.ensure_user(user_id)
+        if not user["voice_join_at"]:
+            return None
+
+        started = datetime.fromisoformat(user["voice_join_at"])
+        elapsed_seconds = max(0, int((datetime.utcnow() - started).total_seconds()))
+
+        async with get_connection(self.db_path) as db:
+            await db.execute(
+                "UPDATE users SET voice_seconds = voice_seconds + ?, voice_join_at = NULL WHERE user_id = ?",
+                (elapsed_seconds, user_id),
+            )
+            await db.commit()
+
+        xp_gained = (elapsed_seconds // 60) * xp_per_minute
+        result = {"elapsed_seconds": elapsed_seconds, "xp_gained": xp_gained}
+        if xp_gained > 0:
+            result.update(await self.add_xp(user_id, xp_gained))
+        else:
+            result.update({"leveled_up": False, "level": user["level"], "xp": user["xp"]})
+        return result
+
+    _RANK_METRICS = {
+        "message_count": "message_count",
+        "voice_seconds": "voice_seconds",
+        "balance": "(balance + bank)",
+    }
+
+    async def get_rank(self, user_id: int, metric: str) -> int | None:
+        """
+        Позиция пользователя (1-based) в рейтинге сервера по metric
+        ('message_count' | 'voice_seconds' | 'balance'). None, если
+        пользователя ещё нет в БД.
+        metric сверяется с белым списком _RANK_METRICS перед тем, как
+        попасть в SQL — это не пользовательский ввод, а значение, которое
+        передаёт сам код, но проверка остаётся на случай опечатки/будущих правок.
+        """
+        if metric not in self._RANK_METRICS:
+            raise ValueError(f"Неизвестная метрика рейтинга: {metric}")
+        order_expr = self._RANK_METRICS[metric]
+
+        user = await self.get_user(user_id)
+        if not user:
+            return None
+
+        async with get_connection(self.db_path) as db:
+            async with db.execute(
+                f"SELECT COUNT(*) + 1 FROM users WHERE {order_expr} > "
+                f"(SELECT {order_expr} FROM users WHERE user_id = ?)",
+                (user_id,),
+            ) as cur:
+                row = await cur.fetchone()
+                return row[0] if row else None
+
+    async def get_user_count(self) -> int:
+        """Сколько всего пользователей заведено в БД (для 'из N' рядом с рангом)."""
+        async with get_connection(self.db_path) as db:
+            async with db.execute("SELECT COUNT(*) FROM users") as cur:
+                row = await cur.fetchone()
+                return row[0] if row else 0
+
+    async def get_leaderboard(self, metric: str, limit: int = 10) -> list[dict]:
+        """Топ пользователей по metric ('message_count' | 'voice_seconds' | 'balance')."""
+        if metric not in self._RANK_METRICS:
+            raise ValueError(f"Неизвестная метрика рейтинга: {metric}")
+        order_expr = self._RANK_METRICS[metric]
+
+        async with get_connection(self.db_path) as db:
+            db.row_factory = aiosqlite.Row
+            async with db.execute(
+                f"SELECT user_id, message_count, voice_seconds, balance, bank, level, xp, "
+                f"{order_expr} AS metric_value FROM users ORDER BY metric_value DESC LIMIT ?",
+                (limit,),
+            ) as cur:
+                return [dict(r) for r in await cur.fetchall()]
 
     # ──────────────────────────── WARNS ────────────────────────────
 
@@ -436,34 +572,63 @@ class Database:
         """
         Купить товар. Возвращает dict:
         {"success": bool, "reason": str | None, "new_balance": int}
+
+        Списание баланса и списание стока происходят атомарно через
+        UPDATE ... WHERE balance >= price / stock > 0 — это защищает от
+        двойной покупки при гонке (два одновременных вызова на одного
+        юзера/товар), в отличие от схемы "прочитать в Python -> записать".
         """
-        user = await self.ensure_user(user_id)
+        await self.ensure_user(user_id)
         item = await self.get_item(item_id)
 
         if not item:
+            user = await self.get_user(user_id)
             return {"success": False, "reason": "Товар не найден", "new_balance": user["balance"]}
         if item["stock"] == 0:
+            user = await self.get_user(user_id)
             return {"success": False, "reason": "Товар закончился", "new_balance": user["balance"]}
-        if user["balance"] < item["price"]:
-            return {"success": False, "reason": "Недостаточно средств", "new_balance": user["balance"]}
 
-        new_balance = user["balance"] - item["price"]
         async with get_connection(self.db_path) as db:
-            await db.execute(
-                "UPDATE users SET balance = ? WHERE user_id = ?", (new_balance, user_id)
+            # атомарное списание баланса: сработает, только если средств всё ещё
+            # хватает на момент самого UPDATE, а не на момент более раннего SELECT
+            cur = await db.execute(
+                "UPDATE users SET balance = balance - ? WHERE user_id = ? AND balance >= ?",
+                (item["price"], user_id, item["price"]),
             )
+            if cur.rowcount == 0:
+                await db.commit()
+                user = await self.get_user(user_id)
+                return {"success": False, "reason": "Недостаточно средств", "new_balance": user["balance"]}
+
+            if item["stock"] > 0:
+                # аналогично — атомарно уменьшаем сток, только если он ещё есть
+                cur = await db.execute(
+                    "UPDATE shop SET stock = stock - 1 WHERE item_id = ? AND stock > 0",
+                    (item_id,),
+                )
+                if cur.rowcount == 0:
+                    # сток закончился между проверкой и покупкой — откатываем списание баланса
+                    await db.execute(
+                        "UPDATE users SET balance = balance + ? WHERE user_id = ?",
+                        (item["price"], user_id),
+                    )
+                    await db.commit()
+                    user = await self.get_user(user_id)
+                    return {"success": False, "reason": "Товар закончился", "new_balance": user["balance"]}
+
             await db.execute(
                 "INSERT INTO inventory (user_id, item_id) VALUES (?, ?)", (user_id, item_id)
             )
-            if item["stock"] > 0:
-                await db.execute(
-                    "UPDATE shop SET stock = stock - 1 WHERE item_id = ?", (item_id,)
-                )
             await db.execute(
                 "INSERT INTO transactions (user_id, amount, reason) VALUES (?, ?, ?)",
                 (user_id, -item["price"], f"Покупка: {item['name']}"),
             )
             await db.commit()
+
+            async with db.execute(
+                "SELECT balance FROM users WHERE user_id = ?", (user_id,)
+            ) as bcur:
+                new_balance = (await bcur.fetchone())[0]
 
         return {"success": True, "reason": None, "new_balance": new_balance}
 
@@ -745,19 +910,30 @@ class Database:
                 return await cur.fetchone() is not None
 
 
-    async def redeem_promocode(self, code: str, user_id: int) -> None:
+    async def redeem_promocode(self, code: str, user_id: int) -> bool:
         """Записывает активацию и увеличивает счётчик использований.
-        Вызывать ТОЛЬКО после всех проверок (см. cog — atomic-логика проверки там)."""
+        Вызывать ТОЛЬКО после всех проверок (см. cog — atomic-логика проверки там).
+
+        Возвращает False вместо падения с IntegrityError, если пользователь
+        успел активировать этот код второй раз между проверкой и записью
+        (двойной клик / гонка) — UNIQUE(code, user_id) в этом случае просто
+        не даст вставить вторую строку.
+        """
         async with get_connection(self.db_path) as db:
-            await db.execute(
-                "INSERT INTO promocode_redemptions (code, user_id) VALUES (?, ?)",
-                (code, user_id),
-            )
+            try:
+                await db.execute(
+                    "INSERT INTO promocode_redemptions (code, user_id) VALUES (?, ?)",
+                    (code, user_id),
+                )
+            except aiosqlite.IntegrityError:
+                await db.rollback()
+                return False
             await db.execute(
                 "UPDATE promocodes SET uses_count = uses_count + 1 WHERE code = ?",
                 (code,),
             )
             await db.commit()
+            return True
 
 
     async def deactivate_promocode(self, code: str) -> bool:
@@ -793,15 +969,51 @@ class Database:
 
     async def can_do_action(self, user_id: int, column: str, cooldown_seconds: int) -> bool:
         user = await self.ensure_user(user_id)
-        last = user[column]
+        last = user.get(column)
         if not last:
             return True
         diff = datetime.utcnow() - datetime.fromisoformat(last)
         return diff.total_seconds() >= cooldown_seconds
 
+
     async def set_action_done(self, user_id: int, column: str) -> None:
-        if column not in {"rob_last", "fish_last", "mine_last"}:
-            raise ValueError("недопустимая колонка")  # белый список — не даём произвольное имя колонки в f-string
+        allowed_columns = {"work_last", "rob_last", "fish_last", "mine_last"}
+        if column not in allowed_columns:
+            raise ValueError(f"Недопустимая колонка кулдауна: {column}")
         async with get_connection(self.db_path) as db:
-            await db.execute(f"UPDATE users SET {column} = ? WHERE user_id = ?", (datetime.utcnow().isoformat(), user_id))
+            await db.execute(
+                f"UPDATE users SET {column} = ? WHERE user_id = ?",
+                (datetime.utcnow().isoformat(), user_id),
+            )
             await db.commit()
+
+    # ──────────────────────────── LOG CHANNELS ────────────────────────────
+
+    async def set_log_channel(self, guild_id: int, category: str, channel_id: int) -> None:
+        async with get_connection(self.db_path) as db:
+            await db.execute(
+                """INSERT INTO log_channels (guild_id, category, channel_id)
+                   VALUES (?, ?, ?)
+                   ON CONFLICT(guild_id, category) DO UPDATE SET
+                       channel_id = excluded.channel_id""",
+                (guild_id, category, channel_id),
+            )
+            await db.commit()
+
+    async def get_log_channel(self, guild_id: int, category: str) -> int | None:
+        async with get_connection(self.db_path) as db:
+            async with db.execute(
+                "SELECT channel_id FROM log_channels WHERE guild_id = ? AND category = ?",
+                (guild_id, category),
+            ) as cur:
+                row = await cur.fetchone()
+                return row[0] if row else None
+
+    async def get_all_log_channels(self, guild_id: int) -> dict:
+        """Возвращает {category: channel_id} для всех настроенных категорий на сервере."""
+        async with get_connection(self.db_path) as db:
+            async with db.execute(
+                "SELECT category, channel_id FROM log_channels WHERE guild_id = ?", (guild_id,)
+            ) as cur:
+                rows = await cur.fetchall()
+                return {row[0]: row[1] for row in rows}
