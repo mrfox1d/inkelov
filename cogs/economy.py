@@ -274,8 +274,6 @@ class Economy(commands.Cog):
             ),
         )
 
-        await reply_embed(target_ctx, econ_embed("🏆 Топ богачей сервера", "\n".join(lines), CLR_GAME_W))
-
     async def _do_coinflip(self, target_ctx, bet: int, side: str):
         author = target_ctx.author
         side = side.capitalize()
