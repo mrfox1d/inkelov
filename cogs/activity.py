@@ -156,7 +156,7 @@ class Activity(commands.Cog):
         else:
             await ctx_or_inter.send(embed=embed)
 
-    @commands.command(name="profile", aliases=["rank", "profile", "balance", "bal"])
+    @commands.command(name="profile", aliases=["rank", "balance", "bal"])
     async def txt_profile(self, ctx: commands.Context, member: disnake.Member = None):
         """Показать профиль активности (уровень, сообщения, войс, баланс)"""
         await self._do_profile(ctx, member)
