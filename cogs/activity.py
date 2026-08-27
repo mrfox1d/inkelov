@@ -201,13 +201,13 @@ class Activity(commands.Cog):
 
         await self._reply(target_ctx, disnake.Embed(title=title, description="\n".join(lines), color=CLR_LEVEL))
 
-    @commands.command(name="activitytop", aliases=["atop"])
+    @commands.command(name="top", aliases=["leaders", "lb", "leaderboard"])
     async def txt_activitytop(self, ctx: commands.Context, metric: str = "messages"):
         """Топ активности: !activitytop messages|voice|balance"""
         metric_map = {"messages": "message_count", "voice": "voice_seconds", "balance": "balance"}
         await self._do_activitytop(ctx, metric_map.get(metric, metric))
 
-    @commands.slash_command(name="activitytop", description="🏆 Топ активности сервера")
+    @commands.slash_command(name="top", description="🏆 Топ участников сервера")
     async def slash_activitytop(
         self, inter: disnake.AppCmdInter,
         metric: str = commands.Param(choices=["messages", "voice", "balance"], description="По какой метрике"),

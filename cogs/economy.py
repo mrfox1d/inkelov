@@ -274,21 +274,6 @@ class Economy(commands.Cog):
             ),
         )
 
-    async def _do_leaderboard(self, target_ctx):
-        guild = target_ctx.guild
-        top = await db.get_leaderboard(limit=10)
-
-        if not top:
-            return await reply_embed(target_ctx, econ_embed("🏆 Топ пуст", "Пока никто не заработал денег.", CLR_MONEY))
-
-        medals = ["🥇", "🥈", "🥉"]
-        lines = []
-        for i, row in enumerate(top):
-            place = medals[i] if i < 3 else f"`#{i + 1}`"
-            user = guild.get_member(row["user_id"])
-            name = user.mention if user else f"`{row['user_id']}`"
-            lines.append(f"{place} {name} — **{money(row['total'])}**")
-
         await reply_embed(target_ctx, econ_embed("🏆 Топ богачей сервера", "\n".join(lines), CLR_GAME_W))
 
     async def _do_coinflip(self, target_ctx, bet: int, side: str):
@@ -660,11 +645,6 @@ class Economy(commands.Cog):
         """Перевести деньги другому пользователю"""
         await self._do_pay(ctx, member, amount)
 
-    @commands.command(name="leaderboard", aliases=["top"])
-    async def txt_leaderboard(self, ctx: commands.Context):
-        """Топ богатых пользователей сервера"""
-        await self._do_leaderboard(ctx)
-
     @commands.command(name="coinflip", aliases=["cf"])
     async def txt_coinflip(self, ctx: commands.Context, bet: int, side: str):
         """Орёл и решка — удвой ставку"""
@@ -730,10 +710,6 @@ class Economy(commands.Cog):
         amount: int = commands.Param(description="Сумма", ge=1),
     ):
         await self._do_pay(inter, member, amount)
-
-    @commands.slash_command(name="leaderboard", description="🏆 Топ богатых пользователей")
-    async def slash_leaderboard(self, inter: disnake.AppCmdInter):
-        await self._do_leaderboard(inter)
 
     @commands.slash_command(name="coinflip", description="🪙 Орёл и решка — удвой ставку")
     async def slash_coinflip(
