@@ -8,19 +8,17 @@ CLR_LEVEL = 0xFFD700
 CLR_INFO  = 0x00D9FF
 CLR_FAIL  = 0xFF2E2E
 
-# ────────────────────────── НАСТРОЙКИ ──────────────────────────
 
-XP_PER_MESSAGE = 15          # XP за одно засчитанное сообщение
-XP_MESSAGE_COOLDOWN = 10     # антиспам: не чаще раза в 10 сек
+XP_PER_MESSAGE = 15
+XP_MESSAGE_COOLDOWN = 10
 
-XP_PER_VOICE_MINUTE = 1      # XP за каждую полную минуту в войсе
+XP_PER_VOICE_MINUTE = 1
 
-# Каналы, где сообщения НЕ дают XP (например бот-спам, счётчики, тикеты)
 XP_IGNORED_CHANNEL_IDS: set[int] = {
-    1532336745453191238,  # канал считалки — иначе абуз через считалку
+    1532336745453191238,
 }
 
-LEVEL_UP_ANNOUNCE_CHANNEL_ID = None  # None = левелап пишется в тот же канал, где было сообщение
+LEVEL_UP_ANNOUNCE_CHANNEL_ID = None
 
 
 def format_voice_time(seconds: int) -> str:
@@ -50,8 +48,6 @@ class Activity(commands.Cog):
     def __init__(self, bot: commands.Bot):
         self.bot = bot
 
-    # ──────────────────────── СООБЩЕНИЯ → XP ────────────────────────
-
     @commands.Cog.listener()
     async def on_message(self, message: disnake.Message):
         if message.author.bot or not message.guild:
@@ -59,7 +55,7 @@ class Activity(commands.Cog):
         if message.channel.id in XP_IGNORED_CHANNEL_IDS:
             return
         if not message.content.strip() and not message.attachments:
-            return  # пустые системные сообщения не считаем
+            return
 
         result = await db.register_message(
             message.author.id, XP_PER_MESSAGE, XP_MESSAGE_COOLDOWN
@@ -77,8 +73,6 @@ class Activity(commands.Cog):
             except disnake.Forbidden:
                 pass
 
-    # ──────────────────────── ВОЙС → XP ────────────────────────
-
     @commands.Cog.listener()
     async def on_voice_state_update(
         self, member: disnake.Member, before: disnake.VoiceState, after: disnake.VoiceState
@@ -89,12 +83,10 @@ class Activity(commands.Cog):
         was_in_voice = before.channel is not None
         is_in_voice = after.channel is not None
 
-        # зашёл в войс (был не в войсе -> стал в войсе)
         if not was_in_voice and is_in_voice:
             await db.start_voice_session(member.id)
             return
 
-        # вышел из войса (был в войсе -> стал не в войсе)
         if was_in_voice and not is_in_voice:
             result = await db.end_voice_session(member.id, XP_PER_VOICE_MINUTE)
             if result and result["leveled_up"]:
@@ -107,11 +99,6 @@ class Activity(commands.Cog):
                     except disnake.Forbidden:
                         pass
             return
-
-        # переход между войс-каналами (был в войсе -> остался в войсе, но канал сменился)
-        # сессию не рвём — время продолжает копиться от исходного voice_join_at
-
-    # ──────────────────────── /profile ────────────────────────
 
     async def _do_profile(self, target_ctx, member: disnake.Member = None):
         author = target_ctx.author
@@ -167,8 +154,6 @@ class Activity(commands.Cog):
         member: disnake.Member = commands.Param(default=None, description="Чей профиль показать"),
     ):
         await self._do_profile(inter, member)
-
-    # ──────────────────────── /activitytop ────────────────────────
 
     METRIC_LABELS = {
         "message_count": ("💬 Топ по сообщениям", lambda u: f"{u['message_count']} сообщ."),

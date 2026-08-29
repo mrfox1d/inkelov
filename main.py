@@ -21,7 +21,7 @@ async def main():
             url="https://twitch.tv/mrfox1d"
         )
     )
-    set_bot(bot)  # привязываем бота к db_guard ДО любых обращений к БД
+    set_bot(bot)
 
     db = Database()
     extensions_loaded = False
@@ -31,15 +31,8 @@ async def main():
         nonlocal extensions_loaded
         print(f"Logged in as {bot.user} ({bot.user.id})")
 
-        # инициализация БД должна быть здесь, а не до bot.start():
-        # если файла БД нет, db_guard восстанавливает его из канала бэкапов,
-        # а для этого боту нужно быть уже подключённым (wait_until_ready
-        # иначе зависнет навсегда, т.к. bot.start() ещё не вызван)
         await db.init_db()
 
-        # коги грузим только ПОСЛЕ init_db(), иначе их cog_load() может
-        # обратиться к таблицам раньше, чем они созданы/смигрированы.
-        # extensions_loaded защищает от повторной загрузки при переподключении
         if not extensions_loaded:
             bot.load_extensions("cogs")
             extensions_loaded = True

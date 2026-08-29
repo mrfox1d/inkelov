@@ -8,12 +8,7 @@ CLR_CLOSE = 0xFF2E2E
 CLR_INFO  = 0x00D9FF
 
 TICKET_CATEGORY_ID = 1529832608199086201
-SUPPORT_ROLE_ID = 1540306233402200106  # TODO: ЗАМЕНИТЬ НА ВАЛИДНОЕ ПОСЛЕ ТЕСТОВ
-
-# ────────────────────────── КАТЕГОРИИ ТИКЕТОВ ──────────────────────────
-# value — используется в custom_id и как префикс имени канала
-# label/description/emoji — то, что видит юзер в select menu
-# question — что бот спросит юзера в открытом тикете
+SUPPORT_ROLE_ID = 1540306233402200106
 
 TICKET_CATEGORIES = [
     {
