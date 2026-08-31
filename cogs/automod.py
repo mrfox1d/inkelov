@@ -159,7 +159,10 @@ class AutoMod(commands.Cog):
     # ──────────────────────── СПАМ ПИНГАМИ ────────────────────────
 
     async def _check_ping_spam(self, message: disnake.Message) -> bool:
-        ping_count = len(message.mentions) + len(message.role_mentions)
+        explicit_mention_ids = set(re.findall(r"<@!?(\d+)>", message.content))
+        role_mention_ids = set(re.findall(r"<@&(\d+)>", message.content))
+        ping_count = len(explicit_mention_ids) + len(role_mention_ids)
+
         if ping_count == 0:
             return False
 
