@@ -89,9 +89,10 @@ def build_shop_select_options(items: list[dict]) -> list[disnake.SelectOption]:
 
 class ShopPanelView(disnake.ui.View):
     """
-    Постоянная view с двухуровневой навигацией: сначала select с категориями,
-    после выбора категории сообщение редактируется на список товаров этой
-    категории + свой select для покупки + кнопка "Назад к категориям".
+    Постоянная view с двухуровневой навигацией: выбор категории в основном
+    (публичном) сообщении-панели НЕ редактирует само сообщение панели —
+    вместо этого пользователю отправляется эфемерный ответ со списком
+    товаров этой категории и своей view для покупки/возврата.
     """
 
     def __init__(self, categories: list[str] = None):
@@ -124,17 +125,20 @@ class ShopPanelView(disnake.ui.View):
         category = select.values[0]
         items = await db.get_all_items(category=category)
 
-        await inter.response.edit_message(
+        # Важно: НЕ редактируем общее сообщение панели (оно должно оставаться
+        # одинаковым для всех), а отправляем персональный эфемерный ответ.
+        await inter.response.send_message(
             embed=build_category_items_embed(category, items),
             view=CategoryItemsView(category, items),
+            ephemeral=True,
         )
 
 
 class CategoryItemsView(disnake.ui.View):
     """
-    Временная view (не persistent — открывается только при переходе внутрь
-    категории): select с товарами конкретной категории + кнопка возврата
-    к списку категорий.
+    View, живущая внутри эфемерного сообщения конкретного пользователя:
+    select с товарами категории + кнопка возврата к списку категорий.
+    Все действия здесь редактируют только это личное эфемерное сообщение.
     """
 
     def __init__(self, category: str, items: list[dict]):
@@ -189,6 +193,8 @@ class CategoryItemsView(disnake.ui.View):
 
     @disnake.ui.button(label="Назад к категориям", emoji="⬅️", style=disnake.ButtonStyle.grey, custom_id="shop_panel:back")
     async def back_to_categories(self, button: disnake.ui.Button, inter: disnake.MessageInteraction):
+        # Это редактирует ТОЛЬКО личное эфемерное сообщение пользователя,
+        # публичной панели это не касается.
         categories = await db.get_shop_categories()
         await inter.response.edit_message(
             embed=build_shop_categories_embed(categories),
