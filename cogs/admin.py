@@ -26,51 +26,60 @@ def admin_embed(title: str, description: str, color: int, fields: list[tuple] = 
     return embed
 
 
-def build_shop_panel_embed(items: list[dict]) -> disnake.Embed:
+def build_shop_categories_embed(categories: list[str]) -> disnake.Embed:
     embed = disnake.Embed(
         title="🛒 Магазин сервера",
         color=CLR_SHOP,
     )
     embed.timestamp = disnake.utils.utcnow()
 
-    if not items:
+    if not categories:
         embed.description = "Магазин пока пуст. Загляните позже!"
     else:
-        # группируем по категориям, сохраняя порядок первого появления
-        categories: dict[str, list[dict]] = {}
+        embed.description = "Выбери категорию в меню ниже, чтобы посмотреть товары."
+        embed.add_field(
+            name="📁 Доступные категории",
+            value="\n".join(f"• {c}" for c in categories),
+            inline=False,
+        )
+
+    embed.set_footer(text="Выбери категорию в меню ниже")
+    return embed
+
+
+def build_category_items_embed(category: str, items: list[dict]) -> disnake.Embed:
+    embed = disnake.Embed(
+        title=f"📁 {category}",
+        color=CLR_SHOP,
+    )
+    embed.timestamp = disnake.utils.utcnow()
+
+    if not items:
+        embed.description = "В этой категории пока нет товаров."
+    else:
+        lines = []
         for item in items:
-            cat = item.get("category") or "Разное"
-            categories.setdefault(cat, []).append(item)
-
-        for cat_name, cat_items in categories.items():
-            lines = []
-            for item in cat_items:
-                stock_str = "∞" if item["stock"] == -1 else str(item["stock"])
-                desc = f" — {item['description']}" if item["description"] else ""
-                lines.append(
-                    f"**`#{item['item_id']}`  {item['name']}**{desc}\n"
-                    f"　　💰 {item['price']:,}".replace(",", " ") + f" 🪙　📦 Остаток: `{stock_str}`"
-                )
-            embed.add_field(
-                name=f"📁 {cat_name}",
-                value="\n\n".join(lines),
-                inline=False,
+            stock_str = "∞" if item["stock"] == -1 else str(item["stock"])
+            desc = f" — {item['description']}" if item["description"] else ""
+            lines.append(
+                f"**`#{item['item_id']}`  {item['name']}**{desc}\n"
+                f"　　💰 {item['price']:,}".replace(",", " ") + f" 🪙　📦 Остаток: `{stock_str}`"
             )
+        embed.description = "\n\n".join(lines)
 
-    embed.set_footer(text="Выбери товар в меню ниже, чтобы купить")
+    embed.set_footer(text="Выбери товар в меню ниже, чтобы купить, или вернись назад")
     return embed
 
 
 def build_shop_select_options(items: list[dict]) -> list[disnake.SelectOption]:
     options = []
-    for item in items[:25]:  # лимит Discord на select menu
+    for item in items[:24]:  # оставляем место под пункт "⬅️ Назад" в том же меню, лимит Discord — 25
         stock_str = "∞" if item["stock"] == -1 else str(item["stock"])
-        cat_name = item.get("category") or "Разное"
         desc = item["description"] or f"Остаток: {stock_str}"
         options.append(
             disnake.SelectOption(
                 label=f"{item['name']} — {item['price']} 🪙"[:100],
-                description=f"[{cat_name}] {desc}"[:100],
+                description=desc[:100],
                 value=str(item["item_id"]),
                 emoji="🛍️",
             )
@@ -79,30 +88,72 @@ def build_shop_select_options(items: list[dict]) -> list[disnake.SelectOption]:
 
 
 class ShopPanelView(disnake.ui.View):
-    """Постоянная view с select menu для покупки товаров прямо из панели."""
+    """
+    Постоянная view с двухуровневой навигацией: сначала select с категориями,
+    после выбора категории сообщение редактируется на список товаров этой
+    категории + свой select для покупки + кнопка "Назад к категориям".
+    """
 
-    def __init__(self, items: list[dict] = None):
+    def __init__(self, categories: list[str] = None):
         super().__init__(timeout=None)
-        items = items or []
+        categories = categories or []
         select = self.children[0]
-        if items:
-            select.options = build_shop_select_options(items)
+        if categories:
+            select.options = [
+                disnake.SelectOption(label=cat[:100], value=cat[:100], emoji="📁")
+                for cat in categories[:25]
+            ]
             select.disabled = False
-            select.placeholder = "🛒 Выбери товар для покупки..."
+            select.placeholder = "🛒 Выбери категорию..."
         else:
             select.options = [disnake.SelectOption(label="Магазин пуст", value="_empty")]
             select.disabled = True
             select.placeholder = "Магазин пуст"
 
     @disnake.ui.select(
-        placeholder="🛒 Выбери товар для покупки...",
+        placeholder="🛒 Выбери категорию...",
         min_values=1,
         max_values=1,
-        custom_id="shop_panel:select",
+        custom_id="shop_panel:category_select",
         options=[disnake.SelectOption(label="Загрузка...", value="_loading")],
     )
-    async def select_item(self, select: disnake.ui.StringSelect, inter: disnake.MessageInteraction):
-        item_id = int(select.values[0])
+    async def select_category(self, select: disnake.ui.StringSelect, inter: disnake.MessageInteraction):
+        if select.values[0] == "_empty":
+            return await inter.response.defer()
+
+        category = select.values[0]
+        items = await db.get_all_items(category=category)
+
+        await inter.response.edit_message(
+            embed=build_category_items_embed(category, items),
+            view=CategoryItemsView(category, items),
+        )
+
+
+class CategoryItemsView(disnake.ui.View):
+    """
+    Временная view (не persistent — открывается только при переходе внутрь
+    категории): select с товарами конкретной категории + кнопка возврата
+    к списку категорий.
+    """
+
+    def __init__(self, category: str, items: list[dict]):
+        super().__init__(timeout=None)
+        self.category = category
+
+        select = disnake.ui.StringSelect(
+            placeholder="🛍️ Выбери товар для покупки..." if items else "В категории нет товаров",
+            min_values=1,
+            max_values=1,
+            options=build_shop_select_options(items) if items else [disnake.SelectOption(label="Пусто", value="_empty")],
+            disabled=not items,
+            custom_id="shop_panel:item_select",
+        )
+        select.callback = self._on_select_item
+        self.add_item(select)
+
+    async def _on_select_item(self, inter: disnake.MessageInteraction):
+        item_id = int(inter.data["values"][0])
         item = await db.get_item(item_id)
 
         if not item:
@@ -136,11 +187,20 @@ class ShopPanelView(disnake.ui.View):
             ephemeral=True,
         )
 
+    @disnake.ui.button(label="Назад к категориям", emoji="⬅️", style=disnake.ButtonStyle.grey, custom_id="shop_panel:back")
+    async def back_to_categories(self, button: disnake.ui.Button, inter: disnake.MessageInteraction):
+        categories = await db.get_shop_categories()
+        await inter.response.edit_message(
+            embed=build_shop_categories_embed(categories),
+            view=ShopPanelView(categories),
+        )
+
 
 class Admin(commands.Cog):
     def __init__(self, bot: commands.Bot):
         self.bot = bot
-        bot.add_view(ShopPanelView())  # регистрируем пустую view, чтобы select работал после рестарта
+        bot.add_view(ShopPanelView())  # регистрируем пустую view для select категорий
+        bot.add_view(CategoryItemsView("", []))  # регистрируем пустую view для кнопки "Назад" и select товаров
 
     async def cog_load(self):
         await self._ensure_shop_panel_posted()
@@ -183,17 +243,17 @@ class Admin(commands.Cog):
         await self._ensure_banner_posted(channel)
 
         panel = await db.get_panel(SHOP_PANEL_KEY)
-        items = await db.get_all_items()
+        categories = await db.get_shop_categories()
 
         if panel and panel["channel_id"] == SHOP_AUTO_CHANNEL_ID:
             try:
                 message = await channel.fetch_message(panel["message_id"])
-                await message.edit(embed=build_shop_panel_embed(items), view=ShopPanelView(items))
+                await message.edit(embed=build_shop_categories_embed(categories), view=ShopPanelView(categories))
                 return
             except (disnake.NotFound, disnake.Forbidden):
                 pass  # старое сообщение пропало — публикуем заново ниже
 
-        message = await channel.send(embed=build_shop_panel_embed(items), view=ShopPanelView(items))
+        message = await channel.send(embed=build_shop_categories_embed(categories), view=ShopPanelView(categories))
         await db.set_panel(SHOP_PANEL_KEY, channel.guild.id, channel.id, message.id)
 
     # ──────────────────────── SHOP PANEL SYNC ──────────────────────
@@ -218,8 +278,8 @@ class Admin(commands.Cog):
         except (disnake.NotFound, disnake.Forbidden):
             return
 
-        items = await db.get_all_items()
-        await message.edit(embed=build_shop_panel_embed(items), view=ShopPanelView(items))
+        categories = await db.get_shop_categories()
+        await message.edit(embed=build_shop_categories_embed(categories), view=ShopPanelView(categories))
 
     # ──────────────────────── SHOP PANEL COMMAND ───────────────────
 
@@ -229,8 +289,8 @@ class Admin(commands.Cog):
         """Создать/переставить стабильную панель магазина в текущий канал."""
         await ctx.message.delete()
 
-        items = await db.get_all_items()
-        message = await ctx.send(embed=build_shop_panel_embed(items), view=ShopPanelView(items))
+        categories = await db.get_shop_categories()
+        message = await ctx.send(embed=build_shop_categories_embed(categories), view=ShopPanelView(categories))
 
         await db.set_panel(SHOP_PANEL_KEY, ctx.guild.id, ctx.channel.id, message.id)
 
