@@ -32,7 +32,8 @@ class Database:
                     price       INTEGER NOT NULL,
                     role_id     INTEGER,
                     stock       INTEGER DEFAULT -1,
-                    is_active   INTEGER NOT NULL DEFAULT 1
+                    is_active   INTEGER NOT NULL DEFAULT 1,
+                    category    TEXT NOT NULL DEFAULT 'Разное'
                 );
 
                 CREATE TABLE IF NOT EXISTS inventory (
@@ -514,13 +515,14 @@ class Database:
         description: str = None,
         role_id: int = None,
         stock: int = -1,
+        category: str = "Разное",
     ) -> int:
         """Добавить товар. Возвращает item_id."""
         async with get_connection(self.db_path) as db:
             cur = await db.execute(
-                """INSERT INTO shop (name, description, price, role_id, stock)
-                VALUES (?, ?, ?, ?, ?)""",
-                (name, description, price, role_id, stock),
+                """INSERT INTO shop (name, description, price, role_id, stock, category)
+                VALUES (?, ?, ?, ?, ?, ?)""",
+                (name, description, price, role_id, stock, category),
             )
             await db.commit()
             return cur.lastrowid
@@ -534,16 +536,34 @@ class Database:
                 row = await cur.fetchone()
                 return dict(row) if row else None
 
-    async def get_all_items(self, only_active: bool = True) -> list[dict]:
-        """Все товары в магазине."""
+    async def get_all_items(self, only_active: bool = True, category: str = None) -> list[dict]:
+        """Все товары в магазине. Если указана category — только из неё."""
         async with get_connection(self.db_path) as db:
             db.row_factory = aiosqlite.Row
             query = "SELECT * FROM shop"
+            conditions = []
+            params = []
+            if only_active:
+                conditions.append("is_active = 1")
+            if category:
+                conditions.append("category = ?")
+                params.append(category)
+            if conditions:
+                query += " WHERE " + " AND ".join(conditions)
+            query += " ORDER BY category ASC, price ASC"
+            async with db.execute(query, params) as cur:
+                return [dict(r) for r in await cur.fetchall()]
+
+    async def get_shop_categories(self, only_active: bool = True) -> list[str]:
+        """Список уникальных категорий, в которых есть хотя бы один товар."""
+        async with get_connection(self.db_path) as db:
+            query = "SELECT DISTINCT category FROM shop"
             if only_active:
                 query += " WHERE is_active = 1"
-            query += " ORDER BY price ASC"
+            query += " ORDER BY category ASC"
             async with db.execute(query) as cur:
-                return [dict(r) for r in await cur.fetchall()]
+                rows = await cur.fetchall()
+                return [r[0] for r in rows]
 
     async def delete_item(self, item_id: int) -> None:
         """Мягкое удаление товара (is_active = 0)."""
@@ -556,9 +576,9 @@ class Database:
     async def edit_item(self, item_id: int, **kwargs) -> None:
         """
         Редактировать поля товара. Допустимые ключи:
-        name, description, price, role_id, stock, is_active
+        name, description, price, role_id, stock, is_active, category
         """
-        allowed = {"name", "description", "price", "role_id", "stock", "is_active"}
+        allowed = {"name", "description", "price", "role_id", "stock", "is_active", "category"}
         fields = {k: v for k, v in kwargs.items() if k in allowed}
         if not fields:
             return

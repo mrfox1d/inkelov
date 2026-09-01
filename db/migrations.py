@@ -29,15 +29,10 @@ SCHEMA = {
         ("level", "INTEGER NOT NULL DEFAULT 1"),
         ("daily_last", "TEXT"),
         ("work_last", "TEXT"),
-        ("created_at", "TEXT NOT NULL DEFAULT (datetime('now'))"),
         ("rob_last", "TEXT"),
-    	("fish_last", "TEXT"),
-    	("mine_last", "TEXT"),
-        ("message_count", "INTEGER NOT NULL DEFAULT 0"),
-        ("voice_seconds", "INTEGER NOT NULL DEFAULT 0"),
-        ("voice_join_at", "TEXT"),
-        ("last_xp_message_at", "TEXT"),
-
+        ("fish_last", "TEXT"),
+        ("mine_last", "TEXT"),
+        ("created_at", "TEXT NOT NULL DEFAULT (datetime('now'))"),
     ],
     "shop": [
         ("name", "TEXT NOT NULL DEFAULT ''"),
@@ -46,6 +41,7 @@ SCHEMA = {
         ("role_id", "INTEGER"),
         ("stock", "INTEGER DEFAULT -1"),
         ("is_active", "INTEGER NOT NULL DEFAULT 1"),
+        ("category", "TEXT NOT NULL DEFAULT 'Разное'"),
     ],
     "inventory": [
         ("user_id", "INTEGER"),
