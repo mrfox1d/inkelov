@@ -1,3 +1,5 @@
+import io
+import aiohttp
 import disnake
 from disnake.ext import commands
 from db.interaction import Database
@@ -154,10 +156,13 @@ class Admin(commands.Cog):
                 pass  # сообщение с баннером удалили — опубликуем заново ниже
 
         try:
-            file = await disnake.File.from_url(SHOP_BANNER_URL, filename="shop_banner.jpg")
-            banner_message = await channel.send(file=file)
-        except (disnake.HTTPException, disnake.NotFound):
-            # ссылка на CDN истекла или недоступна — пропускаем баннер, панель всё равно опубликуется
+            async with aiohttp.ClientSession() as session:
+                async with session.get(SHOP_BANNER_URL) as resp:
+                    if resp.status != 200:
+                        return  # ссылка на CDN истекла/недоступна — пропускаем баннер
+                    data = io.BytesIO(await resp.read())
+            banner_message = await channel.send(file=disnake.File(data, filename="shop_banner.jpg"))
+        except aiohttp.ClientError:
             return
 
         await db.set_panel(f"{SHOP_PANEL_KEY}_banner", channel.guild.id, channel.id, banner_message.id)
